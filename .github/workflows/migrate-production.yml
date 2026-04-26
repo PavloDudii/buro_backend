@@ -21,6 +21,7 @@ jobs:
     environment: production
     env:
       DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+      VERCEL_DEPLOY_HOOK_URL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -40,7 +41,5 @@ jobs:
         run: uv run alembic upgrade head
 
       - name: Trigger Vercel production deploy
-        if: ${{ secrets.VERCEL_DEPLOY_HOOK_URL != '' }}
+        if: ${{ env.VERCEL_DEPLOY_HOOK_URL != '' }}
         run: curl --fail --silent --show-error --request POST "$VERCEL_DEPLOY_HOOK_URL"
-        env:
-          VERCEL_DEPLOY_HOOK_URL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
