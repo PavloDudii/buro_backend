@@ -10,6 +10,7 @@ from src.core.security import decode_token
 from src.core.settings import Settings, get_settings
 from src.models.user import User, UserRole
 from src.repositories.user import UserRepository
+from src.services.blob_storage import BlobStorage, VercelBlobStorage
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -58,3 +59,9 @@ async def get_current_admin_user(
             detail="Admin privileges are required.",
         )
     return current_user
+
+
+async def get_blob_storage(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> BlobStorage:
+    return VercelBlobStorage(settings)

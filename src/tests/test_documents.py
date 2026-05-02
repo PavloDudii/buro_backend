@@ -1,11 +1,83 @@
+from collections.abc import Iterator, Sequence
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from io import BytesIO
+from uuid import UUID
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 
+from src.core.db.session import AsyncSessionLocal
+from src.core.dependencies import get_blob_storage
 from src.main import app
+from src.models.document import UploadedDocument
+from src.services.blob_storage import StoredBlob, build_document_blob_path
 from src.tests.test_auth import register_user
+
+
+@dataclass(frozen=True)
+class BlobPutCall:
+    user_id: UUID
+    document_id: UUID
+    safe_filename: str
+    content: bytes
+    content_type: str
+    uploaded_at: datetime
+
+
+class FakeBlobStorage:
+    def __init__(self) -> None:
+        self.calls: list[BlobPutCall] = []
+        self.deleted_pathnames: list[str] = []
+        self.fail_on_call: int | None = None
+
+    async def put_document(
+        self,
+        *,
+        user_id: UUID,
+        document_id: UUID,
+        safe_filename: str,
+        content: bytes,
+        content_type: str,
+        uploaded_at: datetime,
+    ) -> StoredBlob:
+        call = BlobPutCall(
+            user_id=user_id,
+            document_id=document_id,
+            safe_filename=safe_filename,
+            content=content,
+            content_type=content_type,
+            uploaded_at=uploaded_at,
+        )
+        self.calls.append(call)
+        if self.fail_on_call == len(self.calls):
+            raise RuntimeError("blob upload failed")
+
+        pathname = build_document_blob_path(
+            user_id=user_id,
+            document_id=document_id,
+            safe_filename=safe_filename,
+            uploaded_at=uploaded_at,
+        )
+        return StoredBlob(
+            pathname=pathname,
+            url=f"https://blob.test/{pathname}",
+            download_url=f"https://blob.test/{pathname}?download=1",
+            etag=f"etag-{len(self.calls)}",
+        )
+
+    async def delete_documents(self, pathnames: Sequence[str]) -> None:
+        self.deleted_pathnames.extend(pathnames)
+
+
+@pytest.fixture(autouse=True)
+def blob_storage_override() -> Iterator[FakeBlobStorage]:
+    fake_blob_storage = FakeBlobStorage()
+    app.dependency_overrides[get_blob_storage] = lambda: fake_blob_storage
+    yield fake_blob_storage
+    app.dependency_overrides.pop(get_blob_storage, None)
 
 
 def pdf_bytes() -> bytes:
@@ -52,8 +124,64 @@ async def upload_pdf(client: AsyncClient, *, filename: str = "policy.pdf") -> di
     return response.json()["items"][0]
 
 
+def test_build_document_blob_path_uses_user_date_id_and_filename() -> None:
+    user_id = UUID("11111111-1111-1111-1111-111111111111")
+    document_id = UUID("22222222-2222-2222-2222-222222222222")
+    uploaded_at = datetime(2026, 5, 2, 12, 30, tzinfo=timezone.utc)
+
+    assert (
+        build_document_blob_path(
+            user_id=user_id,
+            document_id=document_id,
+            safe_filename="Course_Plan.pdf",
+            uploaded_at=uploaded_at,
+        )
+        == "documents/11111111-1111-1111-1111-111111111111/2026/05/"
+        "22222222-2222-2222-2222-222222222222-Course_Plan.pdf"
+    )
+
+
 @pytest.mark.anyio
-async def test_admin_can_upload_multiple_document_files(client: AsyncClient) -> None:
+async def test_admin_upload_saves_file_to_blob_storage(
+    client: AsyncClient,
+    blob_storage_override: FakeBlobStorage,
+) -> None:
+    token = await admin_token(client)
+
+    response = await client.post(
+        "/api/v1/documents/uploads",
+        headers={"Authorization": f"Bearer {token}"},
+        files=[("files", ("policy.pdf", pdf_bytes(), "application/pdf"))],
+    )
+
+    assert response.status_code == 201
+    item = response.json()["items"][0]
+    assert item["storage_key"]
+    assert len(blob_storage_override.calls) == 1
+
+    call = blob_storage_override.calls[0]
+    assert call.content == pdf_bytes()
+    assert call.content_type == "application/pdf"
+    assert call.safe_filename == "policy.pdf"
+    assert item["id"] == str(call.document_id)
+    assert item["storage_key"] == build_document_blob_path(
+        user_id=call.user_id,
+        document_id=call.document_id,
+        safe_filename=call.safe_filename,
+        uploaded_at=call.uploaded_at,
+    )
+
+    async with AsyncSessionLocal() as session:
+        document = await session.get(UploadedDocument, UUID(item["id"]))
+    assert document is not None
+    assert document.storage_key == item["storage_key"]
+
+
+@pytest.mark.anyio
+async def test_admin_can_upload_multiple_document_files(
+    client: AsyncClient,
+    blob_storage_override: FakeBlobStorage,
+) -> None:
     token = await admin_token(client)
 
     response = await client.post(
@@ -84,6 +212,9 @@ async def test_admin_can_upload_multiple_document_files(client: AsyncClient) -> 
     assert all(item["uploaded_by_email"] == "admin@buro.com" for item in payload["items"])
     assert all(item["size_bytes"] > 0 for item in payload["items"])
     assert all(item["sha256_hash"] for item in payload["items"])
+    assert all(item["storage_key"] for item in payload["items"])
+    assert len(blob_storage_override.calls) == 3
+    assert len({item["storage_key"] for item in payload["items"]}) == 3
 
 
 @pytest.mark.anyio
@@ -178,7 +309,10 @@ async def test_default_user_cannot_get_uploaded_document_by_id(client: AsyncClie
 
 
 @pytest.mark.anyio
-async def test_admin_can_soft_delete_uploaded_document(client: AsyncClient) -> None:
+async def test_admin_can_soft_delete_uploaded_document(
+    client: AsyncClient,
+    blob_storage_override: FakeBlobStorage,
+) -> None:
     token = await admin_token(client)
     uploaded = await upload_pdf(client)
 
@@ -198,6 +332,7 @@ async def test_admin_can_soft_delete_uploaded_document(client: AsyncClient) -> N
     assert delete_response.status_code == 204
     assert get_response.status_code == 404
     assert uploaded["id"] not in {item["id"] for item in list_response.json()["items"]}
+    assert blob_storage_override.deleted_pathnames == []
 
 
 @pytest.mark.anyio
@@ -223,7 +358,10 @@ async def test_delete_missing_or_already_deleted_document_returns_404(client: As
 
 
 @pytest.mark.anyio
-async def test_upload_rejects_unsupported_extension(client: AsyncClient) -> None:
+async def test_upload_rejects_unsupported_extension(
+    client: AsyncClient,
+    blob_storage_override: FakeBlobStorage,
+) -> None:
     token = await admin_token(client)
 
     response = await client.post(
@@ -233,6 +371,41 @@ async def test_upload_rejects_unsupported_extension(client: AsyncClient) -> None
     )
 
     assert response.status_code == 415
+    assert blob_storage_override.calls == []
+
+
+@pytest.mark.anyio
+async def test_blob_upload_failure_rolls_back_metadata_and_cleans_uploaded_blobs(
+    client: AsyncClient,
+    blob_storage_override: FakeBlobStorage,
+) -> None:
+    token = await admin_token(client)
+    blob_storage_override.fail_on_call = 2
+
+    response = await client.post(
+        "/api/v1/documents/uploads",
+        headers={"Authorization": f"Bearer {token}"},
+        files=[
+            ("files", ("policy.pdf", pdf_bytes(), "application/pdf")),
+            ("files", ("notes.txt", b"plain university notes", "text/plain")),
+        ],
+    )
+
+    assert response.status_code == 502
+    assert len(blob_storage_override.calls) == 2
+    assert len(blob_storage_override.deleted_pathnames) == 1
+
+    first_call = blob_storage_override.calls[0]
+    assert blob_storage_override.deleted_pathnames[0] == build_document_blob_path(
+        user_id=first_call.user_id,
+        document_id=first_call.document_id,
+        safe_filename=first_call.safe_filename,
+        uploaded_at=first_call.uploaded_at,
+    )
+
+    async with AsyncSessionLocal() as session:
+        documents = (await session.execute(select(UploadedDocument))).scalars().all()
+    assert documents == []
 
 
 @pytest.mark.anyio

@@ -14,6 +14,7 @@ from src.models.document import UploadedDocument
 from src.models.user import User
 from src.repositories.document import UploadedDocumentRepository
 from src.schemas.document import UploadedDocumentListResponse, UploadedDocumentResponse
+from src.services.blob_storage import BlobStorage
 
 MAX_UPLOAD_FILE_SIZE_BYTES = 10 * 1024 * 1024
 MAX_UPLOAD_FILES = 10
@@ -52,10 +53,17 @@ class ValidatedUpload:
     sha256_hash: str
 
 
+@dataclass(frozen=True)
+class PreparedUpload:
+    content: bytes
+    validated: ValidatedUpload
+
+
 class DocumentUploadService:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, *, blob_storage: BlobStorage | None = None) -> None:
         self.session = session
         self.uploaded_documents = UploadedDocumentRepository(session)
+        self.blob_storage = blob_storage
 
     async def upload_documents(
         self,
@@ -74,23 +82,57 @@ class DocumentUploadService:
                 detail=f"At most {MAX_UPLOAD_FILES} files can be uploaded at once.",
             )
 
-        documents: list[UploadedDocument] = []
+        prepared_uploads: list[PreparedUpload] = []
         for file in files:
             content = await self._read_file(file)
             validated = self._validate_file(file, content)
-            documents.append(
-                await self.uploaded_documents.create(
-                    original_filename=validated.original_filename,
-                    safe_filename=validated.safe_filename,
-                    content_type=validated.content_type,
-                    file_extension=validated.file_extension,
-                    size_bytes=validated.size_bytes,
-                    sha256_hash=validated.sha256_hash,
-                    uploaded_by_id=uploaded_by.id,
-                )
-            )
+            prepared_uploads.append(PreparedUpload(content=content, validated=validated))
 
-        await self.session.commit()
+        if self.blob_storage is None:
+            raise RuntimeError("Blob storage must be configured for document uploads.")
+
+        documents: list[UploadedDocument] = []
+        uploaded_pathnames: list[str] = []
+        try:
+            for prepared in prepared_uploads:
+                document_id = uuid.uuid4()
+                uploaded_at = utcnow()
+                stored_blob = await self.blob_storage.put_document(
+                    user_id=uploaded_by.id,
+                    document_id=document_id,
+                    safe_filename=prepared.validated.safe_filename,
+                    content=prepared.content,
+                    content_type=prepared.validated.content_type,
+                    uploaded_at=uploaded_at,
+                )
+                uploaded_pathnames.append(stored_blob.pathname)
+                documents.append(
+                    await self.uploaded_documents.create(
+                        document_id=document_id,
+                        original_filename=prepared.validated.original_filename,
+                        safe_filename=prepared.validated.safe_filename,
+                        content_type=prepared.validated.content_type,
+                        file_extension=prepared.validated.file_extension,
+                        size_bytes=prepared.validated.size_bytes,
+                        sha256_hash=prepared.validated.sha256_hash,
+                        storage_key=stored_blob.pathname,
+                        uploaded_by_id=uploaded_by.id,
+                    )
+                )
+
+            await self.session.commit()
+        except Exception as exc:
+            await self.session.rollback()
+            if uploaded_pathnames:
+                try:
+                    await self.blob_storage.delete_documents(uploaded_pathnames)
+                except Exception:
+                    pass
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Document storage is temporarily unavailable.",
+            ) from exc
+
         for document in documents:
             await self.session.refresh(document)
 

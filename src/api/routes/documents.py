@@ -5,9 +5,10 @@ from fastapi import APIRouter, Depends, File, Query, Response, UploadFile, statu
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.db.session import get_db
-from src.core.dependencies import get_current_admin_user
+from src.core.dependencies import get_blob_storage, get_current_admin_user
 from src.models.user import User
 from src.schemas.document import UploadedDocumentListResponse, UploadedDocumentResponse
+from src.services.blob_storage import BlobStorage
 from src.services.document_upload import DocumentUploadService
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -38,8 +39,9 @@ async def upload_documents(
     files: Annotated[list[UploadFile], File()],
     db: Annotated[AsyncSession, Depends(get_db)],
     current_admin: Annotated[User, Depends(get_current_admin_user)],
+    blob_storage: Annotated[BlobStorage, Depends(get_blob_storage)],
 ) -> UploadedDocumentListResponse:
-    return await DocumentUploadService(db).upload_documents(
+    return await DocumentUploadService(db, blob_storage=blob_storage).upload_documents(
         files=files,
         uploaded_by=current_admin,
     )

@@ -15,14 +15,15 @@ class UploadedDocumentRepository:
     async def create(
         self,
         *,
+        document_id: uuid.UUID | None = None,
         original_filename: str,
         safe_filename: str,
         content_type: str,
         file_extension: str,
         size_bytes: int,
         sha256_hash: str,
+        storage_key: str,
         uploaded_by_id: uuid.UUID,
-        storage_key: str | None = None,
     ) -> UploadedDocument:
         document = UploadedDocument(
             original_filename=original_filename,
@@ -34,6 +35,8 @@ class UploadedDocumentRepository:
             uploaded_by_id=uploaded_by_id,
             storage_key=storage_key,
         )
+        if document_id is not None:
+            document.id = document_id
         self.session.add(document)
         await self.session.flush()
         return document

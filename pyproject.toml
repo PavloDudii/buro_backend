@@ -18,6 +18,7 @@ dependencies = [
   "python-multipart>=0.0.9",
   "structlog>=24.2.0",
   "greenlet>=3.0.3",
+  "vercel>=0.5.0",
 ]
 
 [project.optional-dependencies]

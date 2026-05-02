@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     refresh_token_ttl_days: int = Field(default=7, alias="REFRESH_TOKEN_TTL_DAYS")
     admin_email: str | None = Field(default=None, alias="ADMIN_EMAIL")
     admin_password: str | None = Field(default=None, alias="ADMIN_PASSWORD")
+    blob_read_write_token: str | None = Field(default=None, alias="BLOB_READ_WRITE_TOKEN")
+    blob_prefix: str = Field(default="documents", alias="BLOB_PREFIX")
 
 
 @lru_cache()
