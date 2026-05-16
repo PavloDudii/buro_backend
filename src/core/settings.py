@@ -1,7 +1,7 @@
 from functools import lru_cache
 import json
 
-from pydantic import Field, field_validator
+from pydantic import Field, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from src.core.logging import LogFormat
@@ -41,7 +41,7 @@ class Settings(BaseSettings):
         default=None,
         alias="DIRECT_UPLOAD_CALLBACK_SECRET",
     )
-    backend_cors_origins: list[str] = Field(default_factory=list, alias="BACKEND_CORS_ORIGINS")
+    allowed_origins_env: str = Field(default="", alias="ALLOWED_ORIGINS")
     openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
     openai_extraction_model: str = Field(default="gpt-5-mini", alias="OPENAI_EXTRACTION_MODEL")
     openai_extraction_concurrency: int = Field(
@@ -60,20 +60,18 @@ class Settings(BaseSettings):
     ocr_timeout_seconds: int = Field(default=300, ge=1, alias="OCR_TIMEOUT_SECONDS")
     ocr_max_pages: int = Field(default=80, ge=1, alias="OCR_MAX_PAGES")
 
-    @field_validator("backend_cors_origins", mode="before")
-    @classmethod
-    def parse_backend_cors_origins(cls, value: object) -> object:
-        if value is None or value == "":
+    @computed_field
+    @property
+    def allowed_origins(self) -> list[str]:
+        raw = self.allowed_origins_env.strip()
+        if not raw:
             return []
-        if isinstance(value, str):
-            raw_value = value.strip()
-            if raw_value.startswith("["):
-                parsed = json.loads(raw_value)
-                if not isinstance(parsed, list):
-                    raise ValueError("BACKEND_CORS_ORIGINS must be a list or comma-separated string.")
-                return parsed
-            return [origin.strip() for origin in raw_value.split(",") if origin.strip()]
-        return value
+        if raw.startswith("["):
+            parsed = json.loads(raw)
+            if not isinstance(parsed, list):
+                raise ValueError("ALLOWED_ORIGINS must be a JSON array or comma-separated string.")
+            return parsed
+        return [o.strip() for o in raw.split(",") if o.strip()]
 
 
 @lru_cache()

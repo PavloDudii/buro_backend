@@ -27,7 +27,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title=settings.app_name, debug=settings.app_debug, lifespan=lifespan)
-cors_origins = settings.backend_cors_origins
+cors_origins = settings.allowed_origins
 if not cors_origins and settings.app_env == "development":
     cors_origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
 
