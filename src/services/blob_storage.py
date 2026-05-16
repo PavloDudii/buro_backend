@@ -32,6 +32,9 @@ class BlobStorage(Protocol):
     async def delete_documents(self, pathnames: Sequence[str]) -> None:
         ...
 
+    async def get_document_content(self, pathname: str) -> bytes:
+        ...
+
 
 def build_document_blob_path(
     *,
@@ -105,8 +108,15 @@ class VercelBlobStorage:
         if inspect.isawaitable(result):
             await result
 
+    async def get_document_content(self, pathname: str) -> bytes:
+        result = await self._get_client().get(pathname, access="private")
+        content = _blob_value(result, "content")
+        if not isinstance(content, bytes):
+            raise RuntimeError("Blob response did not contain bytes content.")
+        return content
 
-def _blob_value(blob: object, key: str) -> str:
+
+def _blob_value(blob: object, key: str) -> Any:
     if isinstance(blob, dict):
         return blob[key]
     return getattr(blob, key)

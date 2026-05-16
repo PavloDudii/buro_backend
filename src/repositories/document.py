@@ -1,10 +1,11 @@
 import uuid
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models.document import UploadedDocument
+from src.models.document import DocumentProcessingStatus, UploadedDocument
 from src.models.user import User
 
 
@@ -24,6 +25,7 @@ class UploadedDocumentRepository:
         sha256_hash: str,
         storage_key: str,
         uploaded_by_id: uuid.UUID,
+        processing_status: DocumentProcessingStatus = DocumentProcessingStatus.NOT_STARTED,
     ) -> UploadedDocument:
         document = UploadedDocument(
             original_filename=original_filename,
@@ -34,6 +36,7 @@ class UploadedDocumentRepository:
             sha256_hash=sha256_hash,
             uploaded_by_id=uploaded_by_id,
             storage_key=storage_key,
+            processing_status=processing_status,
         )
         if document_id is not None:
             document.id = document_id
@@ -57,7 +60,7 @@ class UploadedDocumentRepository:
         offset: int,
         search: str | None = None,
     ) -> tuple[list[UploadedDocument], int]:
-        filters = [UploadedDocument.deleted_at.is_(None)]
+        filters: list[Any] = [UploadedDocument.deleted_at.is_(None)]
         if search:
             pattern = f"%{search.strip()}%"
             filters.append(
@@ -82,4 +85,19 @@ class UploadedDocumentRepository:
 
     async def soft_delete(self, document: UploadedDocument, *, deleted_at: datetime) -> None:
         document.deleted_at = deleted_at
+        await self.session.flush()
+
+    async def set_processing_status(
+        self,
+        document: UploadedDocument,
+        *,
+        status: DocumentProcessingStatus,
+        error: str | None = None,
+        error_code: str | None = None,
+        error_stage: str | None = None,
+    ) -> None:
+        document.processing_status = status
+        document.processing_error = error
+        document.processing_error_code = error_code
+        document.processing_error_stage = error_stage
         await self.session.flush()
