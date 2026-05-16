@@ -1,7 +1,7 @@
-import uuid
 from typing import Annotated
+import uuid
 
-from fastapi import Depends, HTTPException, status
+from fastapi import BackgroundTasks, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,6 +11,11 @@ from src.core.settings import Settings, get_settings
 from src.models.user import User, UserRole
 from src.repositories.user import UserRepository
 from src.services.blob_storage import BlobStorage, VercelBlobStorage
+from src.services.document_processing import (
+    DocumentProcessingScheduler,
+    FastAPIDocumentProcessingScheduler,
+)
+from src.services.program_import import HttpxProgramImportClient, ProgramImportClient
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -65,3 +70,13 @@ async def get_blob_storage(
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> BlobStorage:
     return VercelBlobStorage(settings)
+
+
+async def get_document_processing_scheduler(
+    background_tasks: BackgroundTasks,
+) -> DocumentProcessingScheduler:
+    return FastAPIDocumentProcessingScheduler(background_tasks)
+
+
+async def get_program_import_client() -> ProgramImportClient:
+    return HttpxProgramImportClient()
