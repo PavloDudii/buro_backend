@@ -27,11 +27,20 @@ class AuthTokens:
 
 
 class AuthService:
-    def __init__(self, session: AsyncSession, settings: Settings) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        settings: Settings,
+        *,
+        users: UserRepository | None = None,
+        refresh_sessions: RefreshSessionRepository | None = None,
+    ) -> None:
         self.session = session
         self.settings = settings
-        self.users = UserRepository(session)
-        self.refresh_sessions = RefreshSessionRepository(session)
+        self.users = users if users is not None else UserRepository(session)
+        self.refresh_sessions = (
+            refresh_sessions if refresh_sessions is not None else RefreshSessionRepository(session)
+        )
 
     async def register(self, *, email: str, full_name: str, password: str) -> tuple[User, AuthTokens]:
         if await self.users.email_exists(email=email):
