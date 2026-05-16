@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  backend:
+    name: Backend checks
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: buro_user
+          POSTGRES_PASSWORD: buro_password
+          POSTGRES_DB: buro_database
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U buro_user -d buro_database"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      TEST_DATABASE_URL: postgresql+psycopg://buro_user:buro_password@localhost:5432/buro_test_database
+      JWT_SECRET_KEY: test-secret-key-with-32-plus-bytes
+      APP_DEBUG: "false"
+      OCR_ENABLED: "false"
+      UV_LINK_MODE: copy
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ghostscript \
+            qpdf \
+            tesseract-ocr \
+            tesseract-ocr-eng \
+            tesseract-ocr-ukr
+
+      - name: Install Python dependencies
+        run: uv sync --frozen --all-extras
+
+      - name: Run lint
+        run: uv run ruff check src alembic
+
+      - name: Run tests
+        run: uv run pytest -q
