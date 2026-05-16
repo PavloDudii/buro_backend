@@ -1,50 +1,20 @@
 import os
 from collections.abc import AsyncIterator
 
-import psycopg
 import pytest
 from httpx import ASGITransport, AsyncClient
-from psycopg import sql
-from sqlalchemy.engine import make_url
 from sqlalchemy import text
+from testcontainers.postgres import PostgresContainer
 
-TEST_DATABASE_URL = os.getenv(
-    "TEST_DATABASE_URL",
-    "postgresql+psycopg://buro_user:buro_password@localhost:5433/buro_test_database",
-)
-os.environ["DATABASE_URL"] = TEST_DATABASE_URL
+_pg = PostgresContainer("pgvector/pgvector:pg17", driver="psycopg")
+_pg.start()
+
+os.environ["DATABASE_URL"] = _pg.get_connection_url()
 os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-with-32-plus-bytes")
 os.environ.setdefault("APP_DEBUG", "false")
 os.environ.setdefault("ADMIN_EMAIL", "admin@buro.com")
 os.environ.setdefault("ADMIN_PASSWORD", "AdminPassword123!")
 os.environ.setdefault("OCR_ENABLED", "false")
-
-
-def ensure_test_database(database_url: str) -> None:
-    url = make_url(database_url)
-    if not url.database:
-        return
-
-    connection_kwargs = {
-        "host": url.host,
-        "dbname": "postgres",
-        "user": url.username,
-        "password": url.password,
-        "autocommit": True,
-    }
-    if url.port is not None:
-        connection_kwargs["port"] = url.port
-
-    with psycopg.connect(**connection_kwargs) as connection:
-        exists = connection.execute(
-            "select 1 from pg_database where datname = %s",
-            (url.database,),
-        ).fetchone()
-        if exists is None:
-            connection.execute(sql.SQL("create database {}").format(sql.Identifier(url.database)))
-
-
-ensure_test_database(TEST_DATABASE_URL)
 
 from src.core.db.session import engine  # noqa: E402
 from src.core.settings import get_settings  # noqa: E402
@@ -61,6 +31,10 @@ from src.models.refresh_session import RefreshSession  # noqa: E402,F401
 from src.models.user import User  # noqa: E402,F401
 from src.services.bootstrap import ensure_configured_admin  # noqa: E402
 from src.services.institution import ensure_institutions_seeded  # noqa: E402
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:  # noqa: ARG001
+    _pg.stop()
 
 
 @pytest.fixture(scope="session")
