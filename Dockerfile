@@ -13,11 +13,27 @@ COPY pyproject.toml uv.lock ./
 COPY . .
 
 FROM base AS runtime
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ghostscript \
+        qpdf \
+        tesseract-ocr \
+        tesseract-ocr-eng \
+        tesseract-ocr-ukr \
+    && rm -rf /var/lib/apt/lists/*
 RUN uv sync --frozen --no-dev
 
 CMD ["uv", "run", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 FROM base AS dev
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ghostscript \
+        qpdf \
+        tesseract-ocr \
+        tesseract-ocr-eng \
+        tesseract-ocr-ukr \
+    && rm -rf /var/lib/apt/lists/*
 RUN uv sync --frozen --all-extras
 
 CMD ["uv", "run", "pytest", "-q"]
